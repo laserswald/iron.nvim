@@ -1,8 +1,5 @@
 # encoding:utf-8
-""" iron.nvim (Interactive Repls Over Neovim).
-
-This is the actual plugin.
-"""
+""" iron.nvim (Interactive Repls Over Neovim).  """
 import logging
 import neovim
 import os
@@ -24,15 +21,6 @@ class Iron(BaseIron):
         super().__init__(nvim)
 
     # Actual Fns
-    def open_repl(self, repl):
-        repl_id = self.termopen(repl['command'])
-
-        self.set_mappings(repl)
-        self.call_hooks(repl)
-        self.set_repl_id(repl, repl_id)
-
-        return repl_id
-
     def sanitize_multiline(self, data, repl):
         multiline = repl['multiline']
         if "\n" in data and repl:
@@ -52,45 +40,30 @@ class Iron(BaseIron):
         ft = self.get_ft()
         return self.has_repl_template(ft) and ft or self.prompt("repl type")
 
-    @neovim.command("IronPromptCommand")
+    @neovim.command("IronPromptCommand", sync=True)
     def prompt_command(self):
         try:
             command = self.prompt("command")
-            repl = self.get_repl_for_ft(self.get_or_prompt_ft())
+            template = self.get_template_for_ft(self.get_or_prompt_ft())
         except:
             logger.warning("User aborted.")
         else:
-            repl['command'] = command
-            self.open_repl(repl)
+            template['command'] = command
+            self.open_repl(template, command=command)
 
-    @neovim.command("IronPromptRepl")
+    @neovim.command("IronPromptRepl", sync=True)
     def prompt_query(self):
         try:
             ft = self.prompt("repl type")
         except:
             logger.warning("User aborted.")
         else:
-            repl = self.get_repl_for_ft(ft)
+            self.iron_repl([ft])
 
-            if not repl:
-                self.call_cmd("echo 'Unable to find repl for {}'".format(ft))
-                return
-
-            self.open_repl(repl)
-
-    @neovim.command("IronRepl")
-    def create_repl(self):
+    @neovim.command("IronRepl", bang=True, sync=True)
+    def create_repl(self, bang):
         ft = self.get_ft()
-        repl = self.get_repl_for_ft(ft)
-
-        if not ft:
-            self.call_cmd("echo 'Closing without a file type'")
-            return
-        elif not repl:
-            self.call_cmd("echo 'Unable to find repl for {}'".format(ft))
-            return
-
-        self.open_repl(repl)
+        self.iron_repl([ft], bang=bang)
 
     @neovim.command("IronDumpReplDefinition")
     def dump_repl_dict(self):
@@ -103,16 +76,39 @@ class Iron(BaseIron):
         except:
             logger.warning("User aborted.")
 
+    @neovim.function("IronStartRepl", sync=True)
+    def iron_repl(self, args, bang=False):
+        ft = args[0]
+        kwargs = {
+            "with_placement": bool(args[1]) if len(args) > 1 else True,
+            "detached": bool(args[2]) if len(args) > 2 else False,
+            "bang": bang
+        }
+
+        template = self.get_template_for_ft(ft)
+
+        if not ft:
+            self.call_cmd("echo 'Closing without a file type'")
+            return
+        elif not template:
+            self.call_cmd("echo 'Unable to find repl for {}'".format(ft))
+            return
+
+        self.open_repl(template, **kwargs)
+
     @neovim.function("IronSendSpecial")
     def mapping_send(self, args):
         fn = self.get_current_bindings().get(args[0])
         if fn:
             fn(self)
 
-    @neovim.function("IronSendMotion")
-    def send_motion_to_repl(self, args):
+    @neovim.function("IronSendMotion", range=True)
+    def send_motion_to_repl(self, args, rng=None):
+        logger.debug("Supplied data: {}".format(", ".join(args)))
         if args[0] == 'line':
             self.call_cmd("""normal! '[V']"sy""")
+        if args[0] == 'visual':
+            self.call_cmd("""normal! `<v`>"sy""")
         else:
             self.call_cmd("""normal! `[v`]"sy""")
 
@@ -120,13 +116,13 @@ class Iron(BaseIron):
 
     @neovim.function("IronSend")
     def send_to_repl(self, args):
-        repl = self.get_repl(args[1]) if len(args) > 1 else None
-        repl = repl or self.get_current_repl()
-
-        if not repl:
-            return None
-
-        logger.debug("Supplied data: {}".format(args[0]))
+        logger.debug("Supplied data: {}".format(", ".join(args)))
+        repl = (
+            self.get_repl(args[1])
+            if len(args) > 1
+            else None
+            or self.get_repl(self.get_ft())
+        )
 
         logger.info("Sending data to repl -> {}".format(repl))
 
